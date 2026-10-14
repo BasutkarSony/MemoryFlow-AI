@@ -81,16 +81,6 @@ The application provides four main views:
 - **Memory Vault** — Work with stored conversational memories.
 - **Recall Studio** — Ask questions and inspect retrieved context.
 
-> **Demo tip:** Add genuine screenshots of these screens here before submission. Screenshots make it easier for judges to understand the product at a glance.
-
-<!-- Replace these placeholders with actual screenshots committed to the repository. -->
-<!--
-<p align="center">
-  <img src="docs/images/overview.png" width="48%" alt="MemoryFlow overview" />
-  <img src="docs/images/recall-studio.png" width="48%" alt="MemoryFlow recall studio" />
-</p>
--->
-
 ## ⚡ Getting started
 
 ### Prerequisites
@@ -102,7 +92,7 @@ The application provides four main views:
 ### 1. Clone the repository
 
 ```bash
-git clone <YOUR_PUBLIC_REPOSITORY_URL>
+git clone https://github.com/BasutkarSony/MemoryFlow-AI.git
 cd MemoryFlow
 ```
 
