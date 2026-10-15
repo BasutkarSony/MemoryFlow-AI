@@ -3,6 +3,58 @@
   const $ = (id) => document.getElementById(id);
   const state = { theme: 'dark', busy: false };
   const text = (el, value) => { if (el) el.textContent = value; };
+  function appendInline(parent, value) {
+    const tokens = /(\*\*[^*]+?\*\*|`[^`]*`)/g;
+    let cursor = 0;
+    let match;
+    while ((match = tokens.exec(value))) {
+      parent.append(document.createTextNode(value.slice(cursor, match.index)));
+      const token = match[0];
+      const element = token.startsWith('**') ? document.createElement('strong') : document.createElement('code');
+      element.textContent = token.startsWith('**') ? token.slice(2, -2) : token.slice(1, -1);
+      parent.append(element);
+      cursor = tokens.lastIndex;
+    }
+    parent.append(document.createTextNode(value.slice(cursor)));
+  }
+  function renderAnswer(el, value) {
+    if (!el) return;
+    const answer = String(value ?? '').replace(/\r\n?/g, '\n').replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n').replace(/\s+(?=#{1,3}\s)/g, '\n').replace(/\s+([-*+])\s+(?=(?:\*\*|`|[A-Z0-9“‘]))/g, '\n$1 ').trim();
+    const fragment = document.createDocumentFragment();
+    const lines = answer.split('\n');
+    let index = 0;
+    while (index < lines.length) {
+      if (!lines[index].trim()) { index += 1; continue; }
+      const heading = lines[index].match(/^\s{0,3}(#{1,3})\s+(.+?)\s*#*\s*$/);
+      if (heading) {
+        const element = document.createElement(`h${heading[1].length}`);
+        appendInline(element, heading[2]);
+        fragment.append(element);
+        index += 1;
+        continue;
+      }
+      if (/^\s*[-*+]\s+/.test(lines[index])) {
+        const list = document.createElement('ul');
+        while (index < lines.length && /^\s*[-*+]\s+/.test(lines[index])) {
+          const item = document.createElement('li');
+          appendInline(item, lines[index].replace(/^\s*[-*+]\s+/, ''));
+          list.append(item);
+          index += 1;
+        }
+        fragment.append(list);
+        continue;
+      }
+      const paragraph = document.createElement('p');
+      while (index < lines.length && lines[index].trim() && !/^\s{0,3}(#{1,3})\s+/.test(lines[index]) && !/^\s*[-*+]\s+/.test(lines[index])) {
+        if (paragraph.childNodes.length) paragraph.append(document.createElement('br'));
+        appendInline(paragraph, lines[index]);
+        index += 1;
+      }
+      fragment.append(paragraph);
+    }
+    if (!fragment.childNodes.length) fragment.append(document.createTextNode('No answer was returned.'));
+    el.replaceChildren(fragment);
+  }
   const status = (id, message, kind = '') => { const el = $(id); if (!el) return; el.textContent = message; el.className = 'inline-status' + (kind ? ' ' + kind : ''); };
   async function request(url, options = {}) {
     const response = await fetch(url, options);
@@ -44,8 +96,8 @@
     state.busy = true; $('saveMemory').disabled = true; text($('saveMemory'), 'Saving memory…'); status('saveStatus', 'Sending memory to the backend…');
     try {
       const data = await request('/process', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: `Remember that ${value}` }) });
-      if (data.intent !== 'remember') throw new Error(data.message || data.answer || 'The backend did not confirm a memory save.');
-      status('saveStatus', '✓ Memory stored. Continue to Recall Studio and ask about this fact.', 'success');
+      if (data.intent !== 'remember' || (!data.stored && !data.duplicate)) throw new Error(data.message || data.answer || 'The backend did not confirm a memory save.');
+      status('saveStatus', data.duplicate ? 'This memory was already stored; no duplicate was added.' : '✓ Memory stored. Continue to Recall Studio and ask about this fact.', 'success');
       $('questionInput').value = 'What is the backup meeting room for the MemoryFlow demo?';
     } catch (error) { status('saveStatus', `Could not save memory: ${error.message}`, 'error'); }
     finally { state.busy = false; $('saveMemory').disabled = false; $('saveMemory').innerHTML = 'Save to memory <span>↗</span>'; }
@@ -59,7 +111,7 @@
       const meta = document.createElement('div'); meta.className = 'evidence-meta';
       const source = document.createElement('span'); source.textContent = item.source || 'memory';
       const score = document.createElement('span'); score.className = 'evidence-score'; score.textContent = Number.isFinite(Number(item.score)) ? `Relevance ${Math.round(Number(item.score) * 100)}%` : '';
-      meta.append(source, score); const body = document.createElement('p'); body.textContent = item.text || '';
+      meta.append(source, score); const body = document.createElement('div'); body.className = 'answer-text evidence-preview'; renderAnswer(body, item.text || '');
       card.append(meta, body); list.append(card);
     });
     if (!items.length) { const empty = document.createElement('p'); empty.className = 'field-help'; empty.textContent = 'No relevant memories were returned for this question.'; list.append(empty); }
@@ -72,8 +124,11 @@
     try {
       const data = await request('/process', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: question }) });
       text($('intentBadge'), `Intent · ${data.intent || 'answer'}`);
-      text($('answerText'), data.answer || data.action || data.message || 'No answer was returned.');
-      renderEvidence(data.results); $('answerContent').hidden = false; text($('answerState'), 'RESPONSE READY'); status('queryStatus', 'Response received from MemoryFlow.', 'success');
+      renderAnswer($('answerText'), data.answer || data.action || data.message || 'No answer was returned.');
+      renderEvidence(data.results); $('answerContent').hidden = false; text($('answerState'), 'RESPONSE READY');
+      const diagnosticCategory = data.reasoning_diagnostics && data.reasoning_diagnostics.category;
+      const reasoningNote = data.reasoning_notice ? ` Retrieved evidence is shown; Lyzr was unavailable${diagnosticCategory ? ` (${diagnosticCategory})` : ''}.` : (Array.isArray(data.delegated_agents) && data.delegated_agents.length ? ` Lyzr reported delegation to: ${data.delegated_agents.join(', ')}.` : '');
+      status('queryStatus', `Response received from MemoryFlow.${reasoningNote}`, 'success');
     } catch (error) { $('answerPlaceholder').hidden = false; text($('answerState'), 'REQUEST FAILED'); status('queryStatus', `Could not retrieve an answer: ${error.message}`, 'error'); }
     finally { state.busy = false; $('askMemory').disabled = false; $('askMemory').innerHTML = 'Recall answer <span>↗</span>'; }
   }
@@ -82,7 +137,7 @@
     state.busy = true;
     const btn = $('syncOmi'); if (btn) { btn.disabled = true; text(btn, 'Syncing Omi…'); }
     text($('omiSyncStatus'), 'Contacting Omi and importing available conversations…');
-    try { const data = await request('/omi/sync', { method: 'POST' }); text($('omiSyncStatus'), `${Number(data.synced) || 0} memories synced from Omi.`, 'success'); }
+    try { const data = await request('/omi/sync', { method: 'POST' }); if (data.error) throw new Error(data.error); text($('omiSyncStatus'), `${Number(data.synced) || 0} memories synced from Omi${data.duplicates ? `; ${data.duplicates} duplicates skipped` : ''}.`, 'success'); }
     catch (error) { text($('omiSyncStatus'), `Omi sync failed: ${error.message}`); $('omiSyncStatus').className = 'inline-status error'; }
     finally { state.busy = false; if (btn) { btn.disabled = false; btn.innerHTML = 'Sync Omi memories ↻'; } await refreshHealth(); }
   }
